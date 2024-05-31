@@ -1,14 +1,15 @@
 using System;
 using System.IO;
-using System.Net.Sockets;
-using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
-using AsyncAwaitBestPractices;
+using CommandLIB;
 using System.Diagnostics;
+using AsyncAwaitBestPractices;
+using static CommandLIB.TwitchBot;
+using System.Runtime.CompilerServices;
+//Thank you @thisduckisnotentitled_0 for helping debug this code <3
 
 namespace JaiBot
 {
-    //StopWatchDebugging
     class StopWatch
     {
         public StopWatch()
@@ -22,86 +23,23 @@ namespace JaiBot
         }
     }
 
-    public class TwitchBot
-    {
-        const string ip = "irc.chat.twitch.tv";
-        const int port = 6667;
-
-        private string nick;
-        private string password;
-        private StreamReader streamReader;
-        private StreamWriter streamWriter;
-        private TaskCompletionSource<int> connected = new TaskCompletionSource<int>();
-
-        public event TwitchChatEventHandler OnMessage = delegate { };
-        public delegate void TwitchChatEventHandler (object sender, TwitchChatMessage e);
-        
-        public class TwitchChatMessage : EventArgs
-        {
-            public string Sender { get; set;}
-            public string Message { get; set;}
-            public string Channel { get; set;}
-        }
-
-        public TwitchBot(string nick, string password)
-        {
-            this.nick = nick;
-            this.password = password;
-        }
-
-        public async Task Start()
-        {
-            var tcpClient = new TcpClient();
-            await tcpClient.ConnectAsync(ip, port);
-            streamReader = new StreamReader(tcpClient.GetStream());
-            streamWriter = new StreamWriter(tcpClient.GetStream()) { NewLine = "\r\n" , AutoFlush = true };
-
-            await streamWriter.WriteLineAsync($"PASS {password}");
-            await streamWriter.WriteLineAsync($"NICK {nick}");
-            connected.SetResult(0);
-
-            while (true)
-            {
-                string line = await streamReader.ReadLineAsync();
-                Console.WriteLine(line);
-
-                string[] split = line.Split(" ");
-                if (line.StartsWith("PING"))
-                {
-                    Console.WriteLine("PING");
-                    await streamWriter.WriteLineAsync($"PONG {split[1]}");
-                }
-                if (split.Length > 1 && split[1] == "PRIVMSG")
-                {
-                    int exclmationPointPosition = split[0].IndexOf("!");
-                    string username = split[0].Substring(1, exclmationPointPosition - 1);
-                    int secondColonPosition = line.IndexOf(':', 1);
-                    string message = line.Substring(secondColonPosition + 1);
-                    string channel = split[2].TrimStart('#');
-
-                    OnMessage(this, new TwitchChatMessage
-                    {
-                        Message = message,
-                        Channel = channel,
-                        Sender = username
-                    });
-                }
-            }
-        }
-        public async Task SendMessage(string channel, string message)
-        {
-            await connected.Task;
-            await streamWriter.WriteLineAsync($"PRIVMSG #{channel} :{message}");
-        }
-        public async Task JoinChannel(string channel)
-        {
-            await connected.Task;
-            await streamWriter.WriteLineAsync($"JOIN #{channel}");
-        }
-    }
-
     class Program
     {
+        private static int survivedCounter = 0;
+        private static int deathsCounter = 0;
+        private static int winsCounter = 0;
+        private static int FourCounter = 0;
+
+        private static bool IsCounterCommand(string command)
+        {
+            return command.StartsWith("!setdeaths") || command.StartsWith("!setsurvived")    ||
+                   command.EndsWith("!s")           || command.StartsWith("!d")              ||
+                   command.StartsWith("!resetS")    || command.StartsWith("!resetD")         ||
+                   command.StartsWith("!setwins")   || command.EndsWith("!w")                ||
+                   command.StartsWith("!set4k")     || command.EndsWith("!4k")               ||
+                   command.StartsWith("!plus4k")    || command.EndsWith("!wins");
+        }
+
         static async Task Main(string[] args)
         {
             string password = File.ReadAllText("C:\\OauthTEXT\\oauth.txt");
@@ -110,23 +48,40 @@ namespace JaiBot
             var twitchBot = new TwitchBot(botUsername, password);
             twitchBot.Start().SafeFireAndForget();
             await twitchBot.JoinChannel("jai0899");
-            //await twitchBot.SendMessage("jai0899", "Bot initalized");
-
+           
+            //VIEWER COMMANDS
             twitchBot.OnMessage += async (sender, twitchChatMessage) =>
             {
                 Console.WriteLine($"{twitchChatMessage.Sender} said '{twitchChatMessage.Message}'");
+
+                if (twitchChatMessage.Message.StartsWith("!deaths"))
+                {
+                    await twitchBot.SendMessage(twitchChatMessage.Channel, $"Jai has died {deathsCounter} trial(s) in a row! :(");
+                }
+                if (twitchChatMessage.Message.StartsWith("!survived"))
+                {
+                    await twitchBot.SendMessage(twitchChatMessage.Channel, $"Jai has survived {survivedCounter} trial(s) in a row!");
+                }
+                if (twitchChatMessage.Message.StartsWith("!4k"))
+                {
+                    await twitchBot.SendMessage(twitchChatMessage.Channel, $"Jai has had {FourCounter} 4k's in a row!");
+                }
+                if (twitchChatMessage.Message.EndsWith("!wins"))
+                {
+                    await twitchBot.SendMessage(twitchChatMessage.Channel, $"Jai has had {winsCounter} win(s) in a row!");
+                }
+                if (twitchChatMessage.Message.Contains("Jai go live"))
+                {
+                    await twitchBot.SendMessage(twitchChatMessage.Channel, "Jai go live already, the people are getting bored");
+                }
                 if (twitchChatMessage.Message.StartsWith("!hey"))
                 {
                     await twitchBot.SendMessage(twitchChatMessage.Channel, $"Hey there {twitchChatMessage.Sender}");
                 }
                 if (twitchChatMessage.Message.StartsWith("!welcome"))
                 {
-                    await twitchBot.SendMessage(twitchChatMessage.Channel, "Welcome to the stream! My name is Jai, I mainly play Dead By Daylight");
+                    await twitchBot.SendMessage(twitchChatMessage.Channel, "Welcome to the stream! My name is Jai, I mainly play Dead By Daylight, I do custom nights with viewers on Saturday, I main Dwight, and am a loving father and husband!");
                 }
-                //if (twitchChatMessage.Message.StartsWith("!discord"))
-                //{
-                //    await twitchBot.SendMessage(twitchChatMessage.Channel, "https://discord.gg/33ADgxyBPu");
-                //}
                 if (twitchChatMessage.Message.StartsWith("!hibaby"))
                 {
                     await twitchBot.SendMessage(twitchChatMessage.Channel, "Hi little Aurora! you look so big and strong! <3 <3 <3");
@@ -143,8 +98,230 @@ namespace JaiBot
                 {
                     await twitchBot.SendMessage(twitchChatMessage.Channel, "jai089JaiEZ jai089JaiEZ jai089JaiEZ");
                 }
+                if (twitchChatMessage.Message.StartsWith("!french"))
+                {
+                    await twitchBot.SendMessage(twitchChatMessage.Channel, "The French are assholes Loyde");
+                }
+                if (twitchChatMessage.Message.EndsWith("!duck"))
+                {
+                    await twitchBot.SendMessage(twitchChatMessage.Channel, "If @thisduckisnotentitled_0 has no haters, I am dead");
+                }
+                if (twitchChatMessage.Message.StartsWith("!duckisdead"))
+                {
+                    await twitchBot.SendMessage(twitchChatMessage.Channel, "Thank you killer for killing @thisduckisnotentitled_0");
+                }
+                if (twitchChatMessage.Message.Contains("Luna"))
+                {
+                    await twitchBot.SendMessage(twitchChatMessage.Channel, "Luna? @girlnamedluna ! That's the person who made me!");
+                }
+
+                // HELP COMMANDS
+                if (twitchChatMessage.Message.StartsWith("!help"))
+                {
+                    await twitchBot.SendMessage(twitchChatMessage.Channel, "!duck, !french, !ez, !gg, !dancedance, !hibaby, !welcome, !hey, !survived, !deaths");
+                }
+                if (twitchChatMessage.Message.StartsWith("!modhelp"))
+                {
+                    await twitchBot.SendMessage(twitchChatMessage.Channel, "!setsurvived [value], setdeaths [value], !s, !d, !resetS, !resetD");
+                }
+
+                // @ COMMANDS
+                if (twitchChatMessage.Message.StartsWith("!shoot"))
+                {
+                    string[] parts = twitchChatMessage.Message.Split(' ');
+                    if (parts.Length == 2)
+                    {
+                        string targetUsername = parts[1].TrimStart('@');
+                        if (string.IsNullOrEmpty(targetUsername))
+                        {
+                            await twitchBot.SendMessage(twitchChatMessage.Channel, $"{twitchChatMessage.Sender} you have to mention a user using the @ symbol to use this command");
+                        }
+                        else
+                        {
+                            await twitchBot.SendMessage(twitchChatMessage.Channel, $"Call an ambulance! Call an ambulance! But not for me! {twitchChatMessage.Sender} shot {targetUsername}... they're okay, right?");
+                        }
+                    }
+                }
+
+                if (twitchChatMessage.Message.StartsWith("!hug"))
+                {
+                    string[] parts = twitchChatMessage.Message.Split(' ');
+                    if (parts.Length == 2)
+                    {
+                        string targetUsername = parts[1].TrimStart('@');
+                        if (string.IsNullOrEmpty(targetUsername))
+                        {
+                            await twitchBot.SendMessage(twitchChatMessage.Channel, $"{twitchChatMessage.Sender} you have to mention a user using the @ symbol to hug them");
+                        }
+                        else
+                        {
+                            await twitchBot.SendMessage(twitchChatMessage.Channel, $"{twitchChatMessage.Sender} hugs {targetUsername} tightly! <3");
+                        }
+                    }
+                }
+            };
+
+            //AUTHORIZED USERS COMMANDS
+            twitchBot.OnMessage += async (sender, twitchChatMessage) =>
+            {
+                Console.WriteLine($"{twitchChatMessage.Sender} said '{twitchChatMessage.Message}'");
+
+                if (IsCounterCommand(twitchChatMessage.Message))
+                {
+
+                    // SET DEATH COUNT
+                    if (twitchChatMessage.Message.StartsWith("!setdeaths"))
+                    {
+                        if (IsAuthorized(twitchChatMessage.Sender))
+                        {
+                            string[] parts = twitchChatMessage.Message.Split(' ');
+                            if (parts.Length == 2 && int.TryParse(parts[1], out int newCounterValue))
+                            {
+                                deathsCounter = newCounterValue;
+                                await twitchBot.SendMessage(twitchChatMessage.Channel, $"Counter set to: {deathsCounter}");
+                            }
+                            else
+                            {
+                                await twitchBot.SendMessage(twitchChatMessage.Channel, "Invalid command format, please use !setdeaths [value]");
+                            }
+                        }
+                        else
+                        {
+                            await twitchBot.SendMessage(twitchChatMessage.Channel, "You are not authorized to use this command.");
+                        }
+                    }
+
+                    // INCREASE KILLER 4K COUNT
+                    else if (twitchChatMessage.Message.StartsWith("!plus4k"))
+                    {
+                        if (IsAuthorized(twitchChatMessage.Sender))
+                        {
+                            FourCounter++;
+                            await twitchBot.SendMessage(twitchChatMessage.Channel, $"Jai got another 4k! He is now at {FourCounter} 4k's in a row!");
+                        }
+                        else
+                        {
+                            await twitchBot.SendMessage(twitchChatMessage.Channel, "You are not authorized to use this command.");
+                        }
+                    }
+
+                    // SET KILLER WINS COUNT
+                    else if (twitchChatMessage.Message.StartsWith("!set4k"))
+                    {
+                        if (IsAuthorized(twitchChatMessage.Sender))
+                        {
+                            string[] parts = twitchChatMessage.Message.Split(' ');
+                            if (parts.Length == 2 && int.TryParse(parts[1], out int newCounterValue))
+                            {
+                                FourCounter = newCounterValue;
+                                await twitchBot.SendMessage(twitchChatMessage.Channel, $"4k counter updated :)");
+                            }
+                            else
+                            {
+                                await twitchBot.SendMessage(twitchChatMessage.Channel, "Invalid command format, please use !set4k [value]");
+                            }
+                        }
+                        else
+                        {
+                            await twitchBot.SendMessage(twitchChatMessage.Channel, "You are not authorized to use this command.");
+                        }
+                    }
+
+                    // INCREASE KILLER WINS COUNT
+                    else if (twitchChatMessage.Message.EndsWith("!w"))
+                    {
+                        if (IsAuthorized(twitchChatMessage.Sender))
+                        {
+                            winsCounter++;
+                            await twitchBot.SendMessage(twitchChatMessage.Channel, $"Jai got another win! He is now at {winsCounter} killer wins in a row!");
+                        }
+                        else
+                        {
+                            await twitchBot.SendMessage(twitchChatMessage.Channel, "You are not authorized to use this command.");
+                        }
+                    }
+
+                    // SET KILLER WINS COUNT
+                    else if (twitchChatMessage.Message.StartsWith("!setwins"))
+                    {
+                        if (IsAuthorized(twitchChatMessage.Sender))
+                        {
+                            string[] parts = twitchChatMessage.Message.Split(' ');
+                            if (parts.Length == 2 && int.TryParse(parts[1], out int newCounterValue))
+                            {
+                                winsCounter = newCounterValue;
+                                await twitchBot.SendMessage(twitchChatMessage.Channel, $"Killer wins counter updated :)");
+                            }
+                            else
+                            {
+                                await twitchBot.SendMessage(twitchChatMessage.Channel, "Invalid command format, please use !setwins [value]");
+                            }
+                        }
+                        else
+                        {
+                            await twitchBot.SendMessage(twitchChatMessage.Channel, "You are not authorized to use this command.");
+                        }
+                    }
+
+                    // SET SURVIVED COUNT
+                    else if (twitchChatMessage.Message.StartsWith("!setsurvived"))
+                    {
+                        if (IsAuthorized(twitchChatMessage.Sender))
+                        {
+                            string[] parts = twitchChatMessage.Message.Split(' ');
+                            if (parts.Length == 2 && int.TryParse(parts[1], out int newCounterValue))
+                            {
+                                survivedCounter = newCounterValue;
+                                await twitchBot.SendMessage(twitchChatMessage.Channel, $"Survived counter updated :)");
+                            }
+                            else
+                            {
+                                await twitchBot.SendMessage(twitchChatMessage.Channel, "Invalid command format, please use !setsurvived [value]");
+                            }
+                        }
+                        else
+                        {
+                            await twitchBot.SendMessage(twitchChatMessage.Channel, "You are not authorized to use this command.");
+                        }
+                    }
+
+                    // INCREASE SURVIVED COUNT
+                    else if (twitchChatMessage.Message.EndsWith("!s"))
+                    {
+                        if (IsAuthorized(twitchChatMessage.Sender))
+                        {
+                            survivedCounter++;
+                            deathsCounter = 0;
+                            await twitchBot.SendMessage(twitchChatMessage.Channel, $"Trials survived in a row: {survivedCounter} :)");
+                        }
+                        else
+                        {
+                            await twitchBot.SendMessage(twitchChatMessage.Channel, "You are not authorized to use this command.");
+                        }
+                    }
+
+                    // INCREASE DEATH COUNT
+                    else if (twitchChatMessage.Message.EndsWith("!d"))
+                    {
+                        if (IsAuthorized(twitchChatMessage.Sender))
+                        {
+                            deathsCounter++;
+                            survivedCounter = 0;
+                            await twitchBot.SendMessage(twitchChatMessage.Channel, $"Trials died in a row: {deathsCounter} :(");
+                        }
+                        else
+                        {
+                            await twitchBot.SendMessage(twitchChatMessage.Channel, "You are not authorized to use this command.");
+                        }
+                    }
+                }
             };
             await Task.Delay(-1);
+        }
+
+        private static bool IsAuthorized(string username)
+        {
+            return username.ToLower() == "jai0899" || username.ToLower() == "girlnamedluna" || username.ToLower() == "killersnipes273" || username.ToLower() == "pantsshampooman";
         }
     }
 }
