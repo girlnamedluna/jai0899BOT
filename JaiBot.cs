@@ -35,57 +35,6 @@ namespace JaiBot
             }
         }
 
-        // Initialize database method
-        private static void InitializeDatabase()
-        {
-            _dbConnection = new SQLiteConnection("Data Source=C:\\JaiBot Stuff\\SQLite\\database\\JaiCoin.db;Version=3;");
-            _dbConnection.Open();
-
-            _deathsDbConnection = new SQLiteConnection("Data Source=C:\\JaiBot Stuff\\SQLite\\database\\DeathsCounter.db;Version=3;");
-            _deathsDbConnection.Open();
-            using (var command = new SQLiteCommand("CREATE TABLE IF NOT EXISTS UserBalances (Username TEXT PRIMARY KEY, Balance INTEGER)", _deathsDbConnection))
-            {
-                command.ExecuteNonQuery();
-            }
-
-            _lostMoneyDbConnection = new SQLiteConnection("Data Source=C:\\JaiBot Stuff\\SQLite\\database\\LostMoney.db;Version=3;");
-            _lostMoneyDbConnection.Open();
-            using (var command = new SQLiteCommand("CREATE TABLE IF NOT EXISTS LostMoney (Username TEXT, LostAmount INTEGER)", _lostMoneyDbConnection))
-            {
-                command.ExecuteNonQuery();
-            }
-
-            // Create database file for survived counter
-            _survivedDbConnection = new SQLiteConnection("Data Source=C:\\JaiBot Stuff\\SQLite\\database\\SurvivedCounter.db;Version=3;");
-            _survivedDbConnection.Open();
-            using (var command = new SQLiteCommand("CREATE TABLE IF NOT EXISTS UserBalances (Username TEXT PRIMARY KEY, Balance INTEGER)", _survivedDbConnection))
-            {
-                command.ExecuteNonQuery();
-            }
-
-            // Create database file for wins counter
-            _winsDbConnection = new SQLiteConnection("Data Source=C:\\JaiBot Stuff\\SQLite\\database\\WinsCounter.db;Version=3;");
-            _winsDbConnection.Open();
-            using (var command = new SQLiteCommand("CREATE TABLE IF NOT EXISTS UserBalances (Username TEXT PRIMARY KEY, Balance INTEGER)", _winsDbConnection))
-            {
-                command.ExecuteNonQuery();
-            }
-
-            // Create database file for 4k counter
-            _fourKDbConnection = new SQLiteConnection("Data Source=C:\\JaiBot Stuff\\SQLite\\database\\FourKCounter.db;Version=3;");
-            _fourKDbConnection.Open();
-            using (var command = new SQLiteCommand("CREATE TABLE IF NOT EXISTS UserBalances (Username TEXT PRIMARY KEY, Balance INTEGER)", _fourKDbConnection))
-            {
-                command.ExecuteNonQuery();
-            }
-
-            // Create table if not exists
-            using (var command = new SQLiteCommand("CREATE TABLE IF NOT EXISTS UserBalances (Username TEXT PRIMARY KEY, Balance INTEGER)", _dbConnection))
-            {
-                command.ExecuteNonQuery();
-            }
-        }
-
         private static int GetUserBalance(string username)
         {
             using (var command = new SQLiteCommand($"SELECT Balance FROM UserBalances WHERE Username = @username", _dbConnection))
@@ -172,7 +121,7 @@ namespace JaiBot
         static async Task Main(string[] args)
         {
             // BOT INITALIZATION
-            InitializeDatabase();
+            DatabaseInitializer.InitializeDatabase();
             
             string password = File.ReadAllText("C:\\JaiBot Stuff\\OauthTEXT\\oauth.txt");
             string botUsername = "jais_pocket_dimension";
@@ -186,13 +135,17 @@ namespace JaiBot
             {
                 Console.WriteLine($"{twitchChatMessage.Sender} said '{twitchChatMessage.Message}'");
 
+                // CURRENCY COMMANDS
                 int senderBalance = GetUserBalance(twitchChatMessage.Sender);
 
+                // Handle command to display top JaiCoin holder
                 if (twitchChatMessage.Message.StartsWith("!top"))
                 {
                     var (topHolder, balance) = GetTopJaiCoinHolder();
                     await twitchBot.SendMessage(twitchChatMessage.Channel, $"Top JaiCoin holder: @{topHolder}, Balance: {balance} JaiCoins");
                 }
+
+                // !work command here
                 if (twitchChatMessage.Message.StartsWith("!work"))
                 {
                     // Check if the user is on cooldown
@@ -217,6 +170,7 @@ namespace JaiBot
                         await twitchBot.SendMessage(twitchChatMessage.Channel, $"@{twitchChatMessage.Sender} worked hard in the Aurora Mines and earned {earnedCoins} JaiCoins!");
                     }
                 }
+
                 if (twitchChatMessage.Message.StartsWith("!house"))
                 {
                     int totalLostMoney = 0;
@@ -230,6 +184,7 @@ namespace JaiBot
                     }
                     await twitchBot.SendMessage(twitchChatMessage.Channel, $"Total lost to the house: {totalLostMoney} JaiCoins.");
                 }
+
                 if (twitchChatMessage.Message.StartsWith("!throwass"))
                 {
                     // Check if the user is on cooldown
@@ -255,6 +210,7 @@ namespace JaiBot
                         await twitchBot.SendMessage(twitchChatMessage.Channel, $"@{twitchChatMessage.Sender} threw it back at Ducks Dive Bar, earning {earnedCoins} JaiCoins, the shame is free!");
                     }
                 }
+
                 if (twitchChatMessage.Message.StartsWith("!coinflip"))
                 {
                     string[] parts = twitchChatMessage.Message.Split(' ');
@@ -291,6 +247,8 @@ namespace JaiBot
                         await twitchBot.SendMessage(twitchChatMessage.Channel, $"Invalid command format or amount. Please use !coinflip <bet amount> @user");
                     }
                 }
+
+                // Accept command for coinflip
                 if (twitchChatMessage.Message.StartsWith("!accept"))
                 {
                     if (coinflipChallenges.TryGetValue(twitchChatMessage.Sender, out string challenger))
@@ -341,6 +299,8 @@ namespace JaiBot
                         await twitchBot.SendMessage(twitchChatMessage.Channel, $"{twitchChatMessage.Sender}, you don't have any pending coinflip challenges to accept.");
                     }
                 }
+
+                // Decline command for coinflip
                 if (twitchChatMessage.Message.StartsWith("!decline"))
                 {
                     if (coinflipChallenges.TryGetValue(twitchChatMessage.Sender, out string challenger))
@@ -354,6 +314,7 @@ namespace JaiBot
                         await twitchBot.SendMessage(twitchChatMessage.Channel, $"{twitchChatMessage.Sender}, you don't have any pending coinflip challenges to decline.");
                     }
                 }
+
                 if (twitchChatMessage.Message.StartsWith("!cooldown"))
                 {
                     string cooldownMessage = $"{twitchChatMessage.Sender}, your cooldowns: ";
@@ -382,6 +343,7 @@ namespace JaiBot
 
                     await twitchBot.SendMessage(twitchChatMessage.Channel, cooldownMessage);
                 }
+
                 if (twitchChatMessage.Message.StartsWith("!give"))
                 {
                     // Parse command to get recipient and amount
@@ -440,6 +402,7 @@ namespace JaiBot
                         await twitchBot.SendMessage(twitchChatMessage.Channel, $"@{username}, your balance is {currentBalance} JaiCoins.");
                     }
                 }
+
                 if (twitchChatMessage.Message.StartsWith("!bal"))
                 {
                     string[] parts = twitchChatMessage.Message.Split(' ');
@@ -495,6 +458,7 @@ namespace JaiBot
                         await twitchBot.SendMessage(twitchChatMessage.Channel, $"Invalid command format or amount. Please use !cf <bet amount>");
                     }
                 }
+
                 if (twitchChatMessage.Message.StartsWith("!deaths"))
                 {
                     int deaths = GetCounterValue("deaths");
@@ -579,6 +543,7 @@ namespace JaiBot
                         }
                     }
                 }
+
                 if (twitchChatMessage.Message.StartsWith("!hug"))
                 {
                     string[] parts = twitchChatMessage.Message.Split(' ');
