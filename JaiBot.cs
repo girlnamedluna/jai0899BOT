@@ -11,24 +11,365 @@ using System.Net.Http.Json;
 using System.Net;
 using System.Collections.Generic;
 using System.Data.SQLite;
+using System.Data.Common;
+using System.Data;
 //Thank you @thisduckisnotentitled_0 for helping debug this code <3
 namespace JaiBot
 {
     class Program
     {
+        // BLACKJACK START
+
+        private static List<string> deck = new List<string>(); // Deck with 52 cards
+        private static Dictionary<string, int> cardCounts = new Dictionary<string, int>(); // Track the count of each card
+
+        private static async Task HandleBlackjackCommand(string sender, string channel, int betAmount)
+        {
+            await Task.Delay(350);
+
+            // Initialize the deck and card counts
+            InitializeDeck();
+
+            // Deal two cards to the player and dealer
+            string[] playerHand = { DealCard(), DealCard() };
+            string[] dealerHand = { DealCard(), DealCard() };
+
+            // Calculate initial scores
+            int playerScore = CalculateScore(playerHand);
+            int dealerScore = CalculateScore(dealerHand);
+
+            // Calculate total hand value for the player
+            int totalPlayerHandValue = playerScore; // Initialize with the initial score
+
+            // Send messages to Twitch chat
+            await twitchBot.SendMessage(channel, $"@{sender}, you were dealt: {string.Join(", ", playerHand)}! Your hand value: {totalPlayerHandValue}");
+
+            // Check for blackjack
+            if (playerScore == 21)
+            {
+                await twitchBot.SendMessage(channel, $"Blackjack! You win {betAmount * 2.0} JaiCoins!");
+                UpdateUserBalance(sender, GetUserBalance(sender) + (int)(betAmount * 2.0));
+                return;
+            }
+            else if (dealerScore == 21)
+            {
+                await twitchBot.SendMessage(channel, $"Dealer has blackjack. You lose {betAmount} JaiCoins.");
+                UpdateLostMoney(sender, betAmount);
+                return;
+            }
+
+            // Allow player to hit or stand
+            await twitchBot.SendMessage(channel, $"@{sender}, type !hit to get another card or !stand to keep your cards.");
+
+            bool playerStand = false;
+            while (!playerStand)
+            {
+                // Wait for player response
+                TwitchChatMessage playerResponse = await WaitForPlayerResponse(sender, channel);
+
+                // Process player response
+                if (playerResponse.Message.StartsWith("!hit", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Deal another card to the player
+                    if (deck.Count < 1)
+                    {
+                        await twitchBot.SendMessage(channel, "The deck is empty.");
+                        return;
+                    }
+
+                    string newCardPlayer = DealCard(); // Define a new variable for the player's new card
+                    playerHand = playerHand.Concat(new string[] { newCardPlayer }).ToArray(); // Convert the result to an array
+
+                    // And similarly for the dealer's turn
+                    while (dealerScore < 17)
+                    {
+                        if (deck.Count < 1)
+                        {
+                            await twitchBot.SendMessage(channel, "The deck is empty.");
+                            return;
+                        }
+
+                        // Deal another card to the dealer
+                        string newCardDealer = DealCard(); // Define a new variable for the dealer's new card
+                        dealerHand = dealerHand.Concat(new string[] { newCardDealer }).ToArray(); // Convert the result to an array
+
+                        // Calculate new score for dealer
+                        dealerScore = CalculateScore(dealerHand);
+                    }
+                    // Calculate new score
+                    playerScore = CalculateScore(playerHand);
+
+                    // Calculate total hand value for the player
+                    totalPlayerHandValue = playerScore;
+
+                    // Send message to Twitch chat
+                    await twitchBot.SendMessage(channel, $"@{sender}, you were dealt: {string.Join(", ", playerHand)}! Your hand value: {totalPlayerHandValue}");
+
+                    // Check for bust
+                    if (playerScore > 21)
+                    {
+                        int lostAmount = betAmount;
+                        await twitchBot.SendMessage(channel, $"Busted! You lose {lostAmount} JaiCoins.");
+                        UpdateLostMoney(sender, lostAmount);
+                        return;
+                    }
+                }
+                else if (playerResponse.Message.StartsWith("!stand", StringComparison.OrdinalIgnoreCase))
+                {
+                    playerStand = true;
+                }
+                else
+                {
+                    await twitchBot.SendMessage(channel, $"@{sender}, please type !hit or !stand.");
+                }
+            }
+
+            // Dealer's turn
+            while (dealerScore < 17)
+            {
+                if (deck.Count < 1) // Change from deck.Length to deck.Count
+                {
+                    await twitchBot.SendMessage(channel, "The deck is empty.");
+                    return;
+                }
+
+                // Deal another card to the dealer
+                string newCard = DealCard(); // Use DealCard method to deal a card
+                dealerHand = dealerHand.Concat(new string[] { newCard }).ToArray(); // Convert the result to an array
+
+                // Calculate new score for dealer
+                dealerScore = CalculateScore(dealerHand);
+            }
+
+            // Send message revealing dealer's hand
+            await twitchBot.SendMessage(channel, $"Dealer reveals: {string.Join(", ", dealerHand)}! Dealer's hand value: {dealerScore}");
+
+            // Determine the winner
+            if (dealerScore > 21 || playerScore > dealerScore)
+            {
+                await twitchBot.SendMessage(channel, $"You win {betAmount} JaiCoins!");
+                UpdateUserBalance(sender, GetUserBalance(sender) + betAmount * 2); // Payout for winning (double the bet)
+            }
+            else if (playerScore < dealerScore)
+            {
+                await twitchBot.SendMessage(channel, $"Dealer wins. You lose {betAmount} JaiCoins.");
+                UpdateLostMoney(sender, betAmount);
+            }
+            else
+            {
+                await twitchBot.SendMessage(channel, $"It's a tie. Your bet of {betAmount} JaiCoins is returned.");
+                UpdateUserBalance(sender, GetUserBalance(sender) + betAmount); // Return the bet amount
+            }
+        }
+
+        private static void InitializeDeck()
+        {
+            string[] cardValues = { "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A" };
+            foreach (string value in cardValues)
+            {
+                cardCounts[value] = 0; // Initialize count for each card
+                for (int i = 0; i < 4; i++)
+                {
+                    deck.Add(value); // Add each card to the deck
+                }
+            }
+            ShuffleDeck(); // Shuffle the deck
+        }
+
+        private static void ShuffleDeck()
+        {
+            Random rng = new Random();
+            int n = deck.Count;
+            while (n > 1)
+            {
+                n--;
+                int k = rng.Next(n + 1);
+                string value = deck[k];
+                deck[k] = deck[n];
+                deck[n] = value;
+            }
+        }
+
+        private static string DealCard()
+        {
+            Random rng = new Random();
+            string card;
+
+            do
+            {
+                int index = rng.Next(deck.Count); // Get a random index from the deck
+                card = deck[index]; // Get the card at that index
+
+                if (cardCounts[card] < 4) // Check if the card count is less than 4
+                {
+                    deck.RemoveAt(index); // Remove the dealt card from the deck
+                    cardCounts[card]++; // Increment the count of the dealt card
+                    break; // Exit the loop if a valid card is found
+                }
+            } while (true);
+
+            return card;
+        }
+
+        // Helper method to calculate the score of a hand
+        private static int CalculateScore(string[] hand)
+        {
+            int score = 0;
+            int numAces = 0;
+
+            foreach (string card in hand)
+            {
+                if (card == "A")
+                {
+                    numAces++;
+                }
+                else if (card == "J" || card == "Q" || card == "K")
+                {
+                    score += 10;
+                }
+                else
+                {
+                    score += int.Parse(card);
+                }
+            }
+
+            // Calculate score with Aces
+            for (int i = 0; i < numAces; i++)
+            {
+                if (score + 11 <= 21)
+                {
+                    score += 11;
+                }
+                else
+                {
+                    score += 1;
+                }
+            }
+
+            return score;
+        }
+
+        // Helper method to wait for player response
+        private static async Task<TwitchChatMessage> WaitForPlayerResponse(string sender, string channel)
+        {
+            var tcs = new TaskCompletionSource<TwitchChatMessage>();
+
+            // Event handler for incoming messages
+            TwitchChatEventHandler messageHandler = null;
+            messageHandler = (s, e) =>
+            {
+                if (e.Sender == sender && e.Channel == channel)
+                {
+                    twitchBot.OnMessage -= messageHandler; // Remove the event handler
+                    tcs.SetResult(e); // Complete the task when the expected message is received
+                }
+            };
+
+            // Attach the event handler
+            twitchBot.OnMessage += messageHandler;
+
+            // Wait for the task to complete
+            return await tcs.Task;
+        }
+
+        // BLACKJACK END
+
+
         private static SQLiteConnection _dbConnection;
-        private static SQLiteConnection _deathsDbConnection;
-        private static SQLiteConnection _survivedDbConnection;
-        private static SQLiteConnection _winsDbConnection;
-        private static SQLiteConnection _fourKDbConnection;
         private static SQLiteConnection _lostMoneyDbConnection;
         private static TwitchBot twitchBot;
-        private static void UpdateLostMoney(string username, int lostAmount)
+        private static void UpdateLostMoney(string sender, int lostAmount)
         {
-            using (var command = new SQLiteCommand("INSERT INTO LostMoney (Username, LostAmount) VALUES (@username, @lostAmount)", _lostMoneyDbConnection))
+            using (var command = new SQLiteCommand("INSERT INTO LostMoney (Username, LostAmount) VALUES (@Username, @LostAmount)", _lostMoneyDbConnection))
             {
-                command.Parameters.AddWithValue("@username", username);
-                command.Parameters.AddWithValue("@lostAmount", lostAmount);
+                command.Parameters.AddWithValue("@Username", sender);
+                command.Parameters.AddWithValue("@LostAmount", lostAmount);
+                command.ExecuteNonQuery();
+            }
+        }
+
+        private static int GetPoolAmount(string side)
+        {
+            string getTotalPoolAmountQuery = "SELECT SUM(Amount) FROM Bets WHERE Side = @side";
+            using (var command = new SQLiteCommand(getTotalPoolAmountQuery, _dbConnection))
+            {
+                command.Parameters.AddWithValue("@side", side);
+                var result = command.ExecuteScalar();
+                return result == DBNull.Value ? 0 : Convert.ToInt32(result);
+            }
+        }
+        private static async Task DeclareWinner(string winningSide, string channel)
+        {
+            // Calculate total bet amounts for both sides
+            int totalBetAmountSideA = GetTotalBetAmount("sideA");
+            int totalBetAmountSideB = GetTotalBetAmount("sideB");
+
+            // Calculate total winnings (original bets returned to winners)
+            int totalWinnings = totalBetAmountSideA + totalBetAmountSideB;
+
+            if (totalWinnings == 0)
+            {
+                await twitchBot.SendMessage(channel, "No bets were placed on either side.");
+                return;
+            }
+
+            // Calculate total bets lost on the losing side
+            int totalBetAmountLosingSide = winningSide == "sideA" ? totalBetAmountSideB : totalBetAmountSideA;
+
+            // Calculate winnings per winner (original bet returned plus share of losing side's bets)
+            int winningsPerWinner = totalWinnings / GetTotalWinners(winningSide);
+
+            // Distribute winnings to all winners
+            DistributeWinnings(winningSide, winningsPerWinner, totalBetAmountLosingSide);
+
+            // Clear the Bets table for the next round of betting
+            ClearBets();
+
+            await twitchBot.SendMessage(channel, $"Bets have been resolved and cleared. Congratulations to the winners!");
+        }
+        private static int GetTotalBetAmount(string side)
+        {
+            string getTotalBetAmountQuery = "SELECT SUM(Amount) FROM Bets WHERE Side = @side";
+            using (var command = new SQLiteCommand(getTotalBetAmountQuery, _dbConnection))
+            {
+                command.Parameters.AddWithValue("@side", side);
+                var result = command.ExecuteScalar();
+                return result == DBNull.Value ? 0 : Convert.ToInt32(result);
+            }
+        }
+        private static int GetTotalWinners(string winningSide)
+        {
+            string getTotalWinnersQuery = "SELECT COUNT(DISTINCT Username) FROM Bets WHERE Side = @winningSide";
+            using (var command = new SQLiteCommand(getTotalWinnersQuery, _dbConnection))
+            {
+                command.Parameters.AddWithValue("@winningSide", winningSide);
+                var result = command.ExecuteScalar();
+                return result == DBNull.Value ? 0 : Convert.ToInt32(result);
+            }
+        }
+        private static void DistributeWinnings(string winningSide, int winningsPerWinner, int totalBetAmountLosingSide)
+        {
+            string getUsersOnWinningSideQuery = "SELECT DISTINCT Username FROM Bets WHERE Side = @winningSide";
+            using (var command = new SQLiteCommand(getUsersOnWinningSideQuery, _dbConnection))
+            {
+                command.Parameters.AddWithValue("@winningSide", winningSide);
+                using (SQLiteDataReader reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        string username = reader.GetString(0);
+                        // Calculate total winnings for the winner
+                        int totalWinningsForWinner = winningsPerWinner + (totalBetAmountLosingSide / GetTotalWinners(winningSide));
+                        // Update user balance
+                        UpdateUserBalance(username, GetUserBalance(username) + totalWinningsForWinner);
+                    }
+                }
+            }
+        }
+        private static void ClearBets()
+        {
+            using (var command = new SQLiteCommand("DELETE FROM Bets", _dbConnection))
+            {
                 command.ExecuteNonQuery();
             }
         }
@@ -39,48 +380,83 @@ namespace JaiBot
             _dbConnection = new SQLiteConnection("Data Source=C:\\JaiBot Stuff\\SQLite\\database\\JaiCoin.db;Version=3;");
             _dbConnection.Open();
 
-            _deathsDbConnection = new SQLiteConnection("Data Source=C:\\JaiBot Stuff\\SQLite\\database\\DeathsCounter.db;Version=3;");
-            _deathsDbConnection.Open();
-            using (var command = new SQLiteCommand("CREATE TABLE IF NOT EXISTS UserBalances (Username TEXT PRIMARY KEY, Balance INTEGER)", _deathsDbConnection))
-            {
-                command.ExecuteNonQuery();
-            }
-
             _lostMoneyDbConnection = new SQLiteConnection("Data Source=C:\\JaiBot Stuff\\SQLite\\database\\LostMoney.db;Version=3;");
             _lostMoneyDbConnection.Open();
+
             using (var command = new SQLiteCommand("CREATE TABLE IF NOT EXISTS LostMoney (Username TEXT, LostAmount INTEGER)", _lostMoneyDbConnection))
             {
                 command.ExecuteNonQuery();
             }
 
-            // Create database file for survived counter
-            _survivedDbConnection = new SQLiteConnection("Data Source=C:\\JaiBot Stuff\\SQLite\\database\\SurvivedCounter.db;Version=3;");
-            _survivedDbConnection.Open();
-            using (var command = new SQLiteCommand("CREATE TABLE IF NOT EXISTS UserBalances (Username TEXT PRIMARY KEY, Balance INTEGER)", _survivedDbConnection))
+            using (var command = new SQLiteCommand("CREATE TABLE IF NOT EXISTS UserBalances (Username TEXT, Balance INTEGER)", _dbConnection))
             {
                 command.ExecuteNonQuery();
             }
 
-            // Create database file for wins counter
-            _winsDbConnection = new SQLiteConnection("Data Source=C:\\JaiBot Stuff\\SQLite\\database\\WinsCounter.db;Version=3;");
-            _winsDbConnection.Open();
-            using (var command = new SQLiteCommand("CREATE TABLE IF NOT EXISTS UserBalances (Username TEXT PRIMARY KEY, Balance INTEGER)", _winsDbConnection))
+            using (var command = new SQLiteCommand("CREATE TABLE IF NOT EXISTS Bets (Username TEXT, Side TEXT, Amount INTEGER)", _dbConnection))
             {
                 command.ExecuteNonQuery();
             }
+        }
 
-            // Create database file for 4k counter
-            _fourKDbConnection = new SQLiteConnection("Data Source=C:\\JaiBot Stuff\\SQLite\\database\\FourKCounter.db;Version=3;");
-            _fourKDbConnection.Open();
-            using (var command = new SQLiteCommand("CREATE TABLE IF NOT EXISTS UserBalances (Username TEXT PRIMARY KEY, Balance INTEGER)", _fourKDbConnection))
+        public async Task ChooseSide(string username, string side, int betAmount)
+        {
+            string insertOrUpdateQuery = "INSERT OR REPLACE INTO UserChoices (Username, Choice, BetAmount) VALUES (@username, @side, @betAmount)";
+            using (SQLiteCommand command = new SQLiteCommand(insertOrUpdateQuery, _dbConnection))
             {
+                command.Parameters.AddWithValue("@username", username);
+                command.Parameters.AddWithValue("@side", side);
+                command.Parameters.AddWithValue("@betAmount", betAmount);
                 command.ExecuteNonQuery();
             }
+        }
 
-            // Create table if not exists
-            using (var command = new SQLiteCommand("CREATE TABLE IF NOT EXISTS UserBalances (Username TEXT PRIMARY KEY, Balance INTEGER)", _dbConnection))
+        public async Task SplitJaicoins(string winningSide)
+        {
+            string getUsersOnWinningSideQuery = "SELECT Username, BetAmount FROM UserChoices WHERE Choice = @winningSide";
+            using (SQLiteCommand command = new SQLiteCommand(getUsersOnWinningSideQuery, _dbConnection))
             {
-                command.ExecuteNonQuery();
+                command.Parameters.AddWithValue("@winningSide", winningSide);
+                List<(string, int)> usersAndBets = new List<(string, int)>();
+                using (SQLiteDataReader reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        string username = reader.GetString(0);
+                        int betAmount = reader.GetInt32(1);
+                        usersAndBets.Add((username, betAmount));
+                    }
+                }
+
+                int totalJaicoins = usersAndBets.Sum(x => x.Item2);
+
+                if (totalJaicoins == 0)
+                {
+                    // No bets placed
+                    return;
+                }
+
+                foreach ((string username, int betAmount) in usersAndBets)
+                {
+                    // Calculate Jaicoins to distribute to each user
+                    int jaicoinsToDistribute = (int)Math.Floor((double)betAmount / totalJaicoins * 1000);
+
+                    // Update user balances in the database
+                    string updateBalanceQuery = "INSERT OR REPLACE INTO UserBalances (Username, Balance) VALUES (@username, COALESCE((SELECT Balance FROM UserBalances WHERE Username = @username), 0) + @jaicoinsToDistribute)";
+                    using (SQLiteCommand updateCommand = new SQLiteCommand(updateBalanceQuery, _dbConnection))
+                    {
+                        updateCommand.Parameters.AddWithValue("@username", username);
+                        updateCommand.Parameters.AddWithValue("@jaicoinsToDistribute", jaicoinsToDistribute);
+                        updateCommand.ExecuteNonQuery();
+                    }
+                }
+
+                // Clear the UserChoices table for the next round of betting
+                string clearUserChoicesQuery = "DELETE FROM UserChoices";
+                using (SQLiteCommand clearCommand = new SQLiteCommand(clearUserChoicesQuery, _dbConnection))
+                {
+                    clearCommand.ExecuteNonQuery();
+                }
             }
         }
 
@@ -93,7 +469,9 @@ namespace JaiBot
                 return result == null ? 0 : Convert.ToInt32(result);
             }
         }
+
         private static Dictionary<string, DateTime> lastWorkTimestamps = new Dictionary<string, DateTime>();
+
         // Method to format and display the leaderboard
         private static void UpdateUserBalance(string username, int newBalance)
         {
@@ -104,13 +482,14 @@ namespace JaiBot
                 command.ExecuteNonQuery();
             }
         }
-        private static readonly TimeSpan WorkCooldown = TimeSpan.FromHours(1);
-        private static readonly TimeSpan ThrowAssCooldown = TimeSpan.FromHours(1);
+        private static readonly TimeSpan WorkCooldown = TimeSpan.FromHours(0.5);
+        private static readonly TimeSpan ThrowAssCooldown = TimeSpan.FromHours(0.5);
         private static Dictionary<string, DateTime> lastThrowAssTimestamps = new Dictionary<string, DateTime>();
         private static int survivedCounter = 0;
         private static int deathsCounter = 0;
         private static int winsCounter = 0;
         private static int FourCounter = 0;
+
         // AUTHORIZED COMMANDS LIST
         private static bool IsCounterCommand(string command)
         {
@@ -120,11 +499,12 @@ namespace JaiBot
                    command.StartsWith("!setwins") || command.EndsWith("!w") ||
                    command.StartsWith("!set4k") || command.EndsWith("!4k") ||
                    command.StartsWith("!plus4k") || command.EndsWith("!wins") ||
-                   command.StartsWith("!reset4k") || command.StartsWith("!resetW");
+                   command.StartsWith("!reset4k") || command.StartsWith("!resetW") ||
+                   command.StartsWith("!addcoins") || command.StartsWith("!bet") ||
+                   command.StartsWith("!removecoins");
         }
         // !GIVE command 24h delay variable
         private static Dictionary<string, DateTime> lastGiveTimestamps = new Dictionary<string, DateTime>();
-        private static Dictionary<string, DateTime> lastResetTimestamps = new Dictionary<string, DateTime>();
         private static readonly Dictionary<string, int> coinflipBets = new Dictionary<string, int>();
         private static readonly Dictionary<string, string> coinflipChallenges = new Dictionary<string, string>();
         private static (string, int) GetTopJaiCoinHolder()
@@ -160,7 +540,6 @@ namespace JaiBot
         {
             // BOT INITALIZATION
             InitializeDatabase();
-            DatabaseInitializer.InitializeDatabase();
 
             string password = File.ReadAllText("C:\\JaiBot Stuff\\OauthTEXT\\oauth.txt");
             string botUsername = "jais_pocket_dimension";
@@ -171,9 +550,57 @@ namespace JaiBot
             twitchBot.OnMessage += async (sender, twitchChatMessage) =>
             {
                 Console.WriteLine($"{twitchChatMessage.Sender} said '{twitchChatMessage.Message}'");
+                await Task.Delay(350);
                 // CURRENCY COMMANDS
                 int senderBalance = GetUserBalance(twitchChatMessage.Sender);
-                // Handle command to display top JaiCoin holder
+
+                if (twitchChatMessage.Message.StartsWith("!bj", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Parse the bet amount from the message
+                    string[] splitMessage = twitchChatMessage.Message.Split(' ');
+                    if (splitMessage.Length != 2 || !int.TryParse(splitMessage[1], out int betAmount) || betAmount <= 0)
+                    {
+                        await twitchBot.SendMessage(twitchChatMessage.Channel, $"@{twitchChatMessage.Sender}, please specify a valid bet amount.");
+                        return;
+                    }
+
+                    // Call the method to handle the blackjack command with the specified bet amount
+                    await HandleBlackjackCommand(twitchChatMessage.Sender, twitchChatMessage.Channel, betAmount);
+                    return; // Exit the event handler after handling the command
+                }
+
+                if (twitchChatMessage.Message.StartsWith("!bet"))
+                {
+                    string[] splitMessage = twitchChatMessage.Message.Split(' ');
+                    if (splitMessage.Length == 3 && (splitMessage[1] == "sideA" || splitMessage[1] == "sideB") && int.TryParse(splitMessage[2], out int betAmount))
+                    {
+                        if (betAmount > 0 && GetUserBalance(twitchChatMessage.Sender) >= betAmount)
+                        {
+                            // Deduct the bet amount from the user's balance
+                            UpdateUserBalance(twitchChatMessage.Sender, GetUserBalance(twitchChatMessage.Sender) - betAmount);
+
+                            // Store the bet in the database
+                            using (var command = new SQLiteCommand("INSERT INTO Bets (Username, Side, Amount) VALUES (@username, @side, @amount)", _dbConnection))
+                            {
+                                command.Parameters.AddWithValue("@username", twitchChatMessage.Sender);
+                                command.Parameters.AddWithValue("@side", splitMessage[1]);
+                                command.Parameters.AddWithValue("@amount", betAmount);
+                                command.ExecuteNonQuery();
+                            }
+
+                            await twitchBot.SendMessage(twitchChatMessage.Channel, $"@{twitchChatMessage.Sender} placed {betAmount} JaiCoins on {splitMessage[1]}!");
+                        }
+                        else
+                        {
+                            await twitchBot.SendMessage(twitchChatMessage.Channel, $"@{twitchChatMessage.Sender}, you don't have enough JaiCoins to place this bet.");
+                        }
+                    }
+                    else
+                    {
+                        await twitchBot.SendMessage(twitchChatMessage.Channel, $"@{twitchChatMessage.Sender}, usage: !bet <sideA|sideB> <amount>");
+                    }
+                }
+
                 if (twitchChatMessage.Message.StartsWith("!top"))
                 {
                     var (topHolder, balance) = GetTopJaiCoinHolder();
@@ -331,6 +758,53 @@ namespace JaiBot
                         await twitchBot.SendMessage(twitchChatMessage.Channel, $"{twitchChatMessage.Sender}, you don't have any pending coinflip challenges to decline.");
                     }
                 }
+                if (twitchChatMessage.Message.StartsWith("!cf"))
+                {
+                    string[] parts = twitchChatMessage.Message.Split(' ');
+                    if (parts.Length == 2 && int.TryParse(parts[1], out int betAmount) && betAmount > 0)
+                    {
+                        if (senderBalance < betAmount)
+                        {
+                            await twitchBot.SendMessage(twitchChatMessage.Channel, $"{twitchChatMessage.Sender}, you don't have enough JaiCoins to bet.");
+                        }
+                        else
+                        {
+                            // Perform the coin flip
+                            Random random = new Random();
+                            bool isWin = random.Next(2) == 0; // 50/50 chance of winning
+                            if (isWin)
+                            {
+                                // Double the bet
+                                int newBalance = senderBalance + betAmount;
+                                UpdateUserBalance(twitchChatMessage.Sender, newBalance);
+                                await twitchBot.SendMessage(twitchChatMessage.Channel, $"{twitchChatMessage.Sender} won {betAmount} JaiCoins! Your balance is now {newBalance} JaiCoins.");
+                            }
+                            else
+                            {
+                                // Deduct the bet
+                                int newBalance = senderBalance - betAmount;
+                                UpdateUserBalance(twitchChatMessage.Sender, newBalance);
+                                await twitchBot.SendMessage(twitchChatMessage.Channel, $"{twitchChatMessage.Sender} lost {betAmount} JaiCoins! Your balance is now {newBalance} JaiCoins.");
+                                // Record lost money
+                                UpdateLostMoney(twitchChatMessage.Sender, betAmount);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        await twitchBot.SendMessage(twitchChatMessage.Channel, $"Invalid command format or amount. Please use !cf <bet amount>");
+                    }
+                }
+                if (twitchChatMessage.Message.StartsWith("!poolA"))
+                {
+                    int poolAmountA = GetPoolAmount("sideA");
+                    await twitchBot.SendMessage(twitchChatMessage.Channel, $"Total Jaicoins pooled for side A: {poolAmountA}");
+                }
+                if (twitchChatMessage.Message.StartsWith("!poolB"))
+                {
+                    int poolAmountB = GetPoolAmount("sideB");
+                    await twitchBot.SendMessage(twitchChatMessage.Channel, $"Total Jaicoins pooled for side B: {poolAmountB}");
+                }
                 if (twitchChatMessage.Message.StartsWith("!cooldown"))
                 {
                     string cooldownMessage = $"{twitchChatMessage.Sender}, your cooldowns: ";
@@ -393,7 +867,7 @@ namespace JaiBot
                         await twitchBot.SendMessage(twitchChatMessage.Channel, $"Invalid command format or amount. Please use !give @user <amount>");
                     }
                 }
-                if (twitchChatMessage.Message.StartsWith("!balance"))
+                if (twitchChatMessage.Message.StartsWith("!balance") || twitchChatMessage.Message.StartsWith("!bal"))
                 {
                     string[] parts = twitchChatMessage.Message.Split(' ');
                     string targetUser = parts.Length > 1 ? parts[1].TrimStart('@') : null;
@@ -406,58 +880,6 @@ namespace JaiBot
                     else
                     {
                         await twitchBot.SendMessage(twitchChatMessage.Channel, $"@{username}, your balance is {currentBalance} JaiCoins.");
-                    }
-                }
-                if (twitchChatMessage.Message.StartsWith("!bal"))
-                {
-                    string[] parts = twitchChatMessage.Message.Split(' ');
-                    string targetUser = parts.Length > 1 ? parts[1].TrimStart('@') : null;
-                    string username = string.IsNullOrEmpty(targetUser) ? twitchChatMessage.Sender : targetUser;
-                    int currentBalance = GetUserBalance(username);
-                    if (targetUser != null)
-                    {
-                        await twitchBot.SendMessage(twitchChatMessage.Channel, $"@{username}'s balance is {currentBalance} JaiCoins.");
-                    }
-                    else
-                    {
-                        await twitchBot.SendMessage(twitchChatMessage.Channel, $"@{username}, your balance is {currentBalance} JaiCoins.");
-                    }
-                }
-                if (twitchChatMessage.Message.StartsWith("!cf"))
-                {
-                    string[] parts = twitchChatMessage.Message.Split(' ');
-                    if (parts.Length == 2 && int.TryParse(parts[1], out int betAmount) && betAmount > 0)
-                    {
-                        if (senderBalance < betAmount)
-                        {
-                            await twitchBot.SendMessage(twitchChatMessage.Channel, $"{twitchChatMessage.Sender}, you don't have enough JaiCoins to bet.");
-                        }
-                        else
-                        {
-                            // Perform the coin flip
-                            Random random = new Random();
-                            bool isWin = random.Next(2) == 0; // 50/50 chance of winning
-                            if (isWin)
-                            {
-                                // Double the bet
-                                int newBalance = senderBalance + betAmount;
-                                UpdateUserBalance(twitchChatMessage.Sender, newBalance);
-                                await twitchBot.SendMessage(twitchChatMessage.Channel, $"{twitchChatMessage.Sender} won {betAmount} JaiCoins! Your balance is now {newBalance} JaiCoins.");
-                            }
-                            else
-                            {
-                                // Deduct the bet
-                                int newBalance = senderBalance - betAmount;
-                                UpdateUserBalance(twitchChatMessage.Sender, newBalance);
-                                await twitchBot.SendMessage(twitchChatMessage.Channel, $"{twitchChatMessage.Sender} lost {betAmount} JaiCoins! Your balance is now {newBalance} JaiCoins.");
-                                // Record lost money
-                                UpdateLostMoney(twitchChatMessage.Sender, betAmount);
-                            }
-                        }
-                    }
-                    else
-                    {
-                        await twitchBot.SendMessage(twitchChatMessage.Channel, $"Invalid command format or amount. Please use !cf <bet amount>");
                     }
                 }
                 if (twitchChatMessage.Message.StartsWith("!deaths"))
@@ -566,6 +988,76 @@ namespace JaiBot
                 if (IsCounterCommand(twitchChatMessage.Message))
                 {//DONT FUCK WITH THIS
                     int senderBalance = GetUserBalance(twitchChatMessage.Sender);
+
+                    if (twitchChatMessage.Message.StartsWith("!declare"))
+                    {
+                        if (IsAuthorized(twitchChatMessage.Sender))
+                        {
+                            string[] splitMessage = twitchChatMessage.Message.Split(' ');
+                            if (splitMessage.Length == 2 && (splitMessage[1] == "sideA" || splitMessage[1] == "sideB"))
+                            {
+                                await DeclareWinner(splitMessage[1], twitchChatMessage.Channel);
+                            }
+                            else
+                            {
+                                await twitchBot.SendMessage(twitchChatMessage.Channel, $"@{twitchChatMessage.Sender}, usage: !declare <sideA|sideB>");
+                            }
+                        }
+                    }
+
+                    if (twitchChatMessage.Message.StartsWith("!addcoins"))
+                    {
+                        if (IsAuthorized(twitchChatMessage.Sender) && twitchChatMessage.Sender.ToLower() == "girlnamedluna")
+                        {
+                            string[] splitMessage = twitchChatMessage.Message.Split(' ');
+                            if (splitMessage.Length == 3 && splitMessage[1].StartsWith("@") && int.TryParse(splitMessage[2], out int amount))
+                            {
+                                string recipient = splitMessage[1].Substring(1); // Remove the "@" symbol
+                                                                                 // Check if the mentioned user exists and update their balance
+                                int recipientBalance = GetUserBalance(recipient);
+                                if (recipientBalance >= 0)
+                                {
+                                    UpdateUserBalance(recipient, recipientBalance + amount);
+                                    await twitchBot.SendMessage(twitchChatMessage.Channel, $"@{twitchChatMessage.Sender}, {amount} Jaicoins have been added to {recipient}'s balance.");
+                                }
+                                else
+                                {
+                                    await twitchBot.SendMessage(twitchChatMessage.Channel, $"@{twitchChatMessage.Sender}, the mentioned user does not exist or has a negative balance.");
+                                }
+                            }
+                            else
+                            {
+                                await twitchBot.SendMessage(twitchChatMessage.Channel, $"@{twitchChatMessage.Sender}, usage: !addcoins <@username> <amount>");
+                            }
+                        }
+                    }
+                    if (twitchChatMessage.Message.StartsWith("!removecoins"))
+                    {
+                        if (IsAuthorized(twitchChatMessage.Sender) && twitchChatMessage.Sender.ToLower() == "girlnamedluna")
+                        {
+                            string[] splitMessage = twitchChatMessage.Message.Split(' ');
+                            if (splitMessage.Length == 3 && splitMessage[1].StartsWith("@") && int.TryParse(splitMessage[2], out int amount))
+                            {
+                                string recipient = splitMessage[1].Substring(1); // Remove the "@" symbol
+                                                                                 // Check if the mentioned user exists and update their balance
+                                int recipientBalance = GetUserBalance(recipient);
+                                if (recipientBalance >= amount)
+                                {
+                                    UpdateUserBalance(recipient, recipientBalance - amount);
+                                    await twitchBot.SendMessage(twitchChatMessage.Channel, $"@{twitchChatMessage.Sender}, {amount} Jaicoins have been removed from {recipient}'s balance.");
+                                }
+                                else
+                                {
+                                    await twitchBot.SendMessage(twitchChatMessage.Channel, $"@{twitchChatMessage.Sender}, the mentioned user does not have enough Jaicoins.");
+                                }
+                            }
+                            else
+                            {
+                                await twitchBot.SendMessage(twitchChatMessage.Channel, $"@{twitchChatMessage.Sender}, usage: !removecoins <@username> <amount>");
+                            }
+                        }
+                    }
+
                     if (twitchChatMessage.Message.StartsWith("!plus4k"))
                     {
                         if (IsAuthorized(twitchChatMessage.Sender))
